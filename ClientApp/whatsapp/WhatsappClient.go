@@ -4,14 +4,20 @@ import (
 	"context"
 	"fmt"
 	_ "github.com/lib/pq"
+	"github.com/virtouso/WhatsappClientServer/ClientApp/shared"
 	"go.mau.fi/whatsmeow"
+	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
+	"google.golang.org/protobuf/proto"
 	"os"
 	"os/signal"
 	"syscall"
 )
+
+var Client *whatsmeow.Client
 
 func eventHandler(evt interface{}) {
 	switch v := evt.(type) {
@@ -20,7 +26,7 @@ func eventHandler(evt interface{}) {
 	}
 }
 
-func RunProcess() {
+func Init() {
 
 	dbLog := waLog.Stdout("Database", "DEBUG", true)
 	container, err := sqlstore.New("postgres", "user=postgres password=moeen777 dbname=whatsapp sslmode=disable", dbLog)
@@ -33,38 +39,57 @@ func RunProcess() {
 		panic(err)
 	}
 	clientLog := waLog.Stdout("Client", "DEBUG", true)
-	client := whatsmeow.NewClient(deviceStore, clientLog)
-	client.AddEventHandler(eventHandler)
+	Client = whatsmeow.NewClient(deviceStore, clientLog)
+	Client.AddEventHandler(eventHandler)
 
-	if client.Store.ID == nil {
+	if Client.Store.ID == nil {
 		// No ID stored, new login
-		qrChan, _ := client.GetQRChannel(context.Background())
-		err = client.Connect()
+		qrChan, _ := Client.GetQRChannel(context.Background())
+		err = Client.Connect()
 		if err != nil {
 			panic(err)
 		}
 		for evt := range qrChan {
 			if evt.Event == "code" {
-				// Render the QR code here
-				// e.g. qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
-				// or just manually `echo 2@... | qrencode -t ansiutf8` in a terminal
+
 				fmt.Println("QR code:", evt.Code)
+				shared.RenderQRCodeInTerminal(evt.Code)
+
 			} else {
 				fmt.Println("Login event:", evt.Event)
 			}
 		}
 	} else {
 		// Already logged in, just connect
-		err = client.Connect()
+		err = Client.Connect()
 		if err != nil {
 			panic(err)
 		}
-	}
 
+	}
+	SendMessage(Client, "905431070120@s.whatsapp.net", "hi dfsd fsd fsd fds ")
 	// Listen to Ctrl+C (you can also do something else that prevents the program from exiting)
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
 
-	client.Disconnect()
+	Client.Disconnect()
+}
+
+func SendMessage(client *whatsmeow.Client, recipient string, messageText string) error {
+	jid, err := types.ParseJID(recipient)
+	if err != nil {
+		return fmt.Errorf("invalid JID %s: %v", recipient, err)
+	}
+
+	msg := &waProto.Message{
+		Conversation: proto.String(messageText),
+	}
+
+	_, err = client.SendMessage(context.Background(), jid, msg)
+	if err != nil {
+		return fmt.Errorf("failed to send message: %w", err)
+	}
+	fmt.Println("Message sent to", recipient)
+	return nil
 }
